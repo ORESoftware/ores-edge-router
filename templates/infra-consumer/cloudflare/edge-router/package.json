@@ -1,0 +1,13 @@
+{
+  "name": "@ORG/edge-router",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "validate": "node node_modules/@oresoftware/ores-edge-router/scripts/validate-config.mjs router.config.json",
+    "render": "node node_modules/@oresoftware/ores-edge-router/scripts/render-wrangler.mjs router.config.json --kv-id $HEALTH_KV_ID",
+    "deploy": "npm run validate && npm run render && wrangler deploy",
+    "status": "curl -s https://api.$DOMAIN/__ores/router/status | jq ."
+  },
+  "dependencies": { "@oresoftware/ores-edge-router": "github:ORESoftware/ores-edge-router#v0.1.0" },
+  "devDependencies": { "wrangler": "^4.30.0" }
+}

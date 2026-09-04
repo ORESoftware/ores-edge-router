@@ -1,0 +1,62 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ORESoftware/ores-edge-router/schemas/router.config.schema.json",
+  "title": "OresEdgeRouterConfig",
+  "description": "Per-org edge routing contract: which subdomains exist on the org's apex domain, which origin is primary (k8s-cluster) and which is the fallback (Cloud Run / CDN / GitHub), and how health is probed. This file is the single authority for the org's Cloudflare edge; wrangler.toml is rendered from it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["org", "domain", "hosts"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "org": { "type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9-]*$", "description": "GitHub org (1:1 with this domain, the Linear project, the Supabase org, the Neon org and the GCP project)." },
+    "domain": { "type": "string", "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)+$", "description": "Apex domain owned by the org and served by Cloudflare." },
+    "linearProject": { "type": "string", "description": "Linear project URL recording this routing implementation (AGENTS.md 1:1:1:1 convention)." },
+    "gcpProject": { "type": "string", "description": "GCP project id hosting the Cloud Run fallbacks." },
+    "health": { "$ref": "#/$defs/health" },
+    "hosts": {
+      "type": "object",
+      "description": "Keyed by subdomain label. The canonical set is auth, org, user, api, admin, api-admin; extra labels (www, registry, web, cdn, ...) are allowed.",
+      "propertyNames": { "pattern": "^[a-z0-9]([a-z0-9-]*[a-z0-9])?$" },
+      "additionalProperties": { "$ref": "#/$defs/host" },
+      "minProperties": 1
+    }
+  },
+  "$defs": {
+    "origin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url"],
+      "properties": {
+        "url": { "type": "string", "pattern": "^https://[^/\\s]+$", "description": "Scheme + host (+ optional :port) of the origin; no path." },
+        "hostHeader": { "type": "string", "description": "Host header to send. Defaults to the public hostname (<label>.<domain>) so the k8s ingress can route by host." },
+        "kind": { "type": "string", "enum": ["k8s", "cloudrun", "cdn", "github", "pages", "tunnel", "other"], "default": "other" },
+        "mode": { "type": "string", "enum": ["proxy", "redirect"], "default": "proxy", "description": "proxy = fetch from origin and stream back; redirect = 302 the client to the origin (for CDN/GitHub fallbacks that cannot serve arbitrary paths)." },
+        "pathPrefix": { "type": "string", "default": "", "description": "Prefix prepended to the request path at this origin (e.g. /releases/download)." }
+      }
+    },
+    "health": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "paths": { "type": "array", "items": { "type": "string", "pattern": "^/" }, "default": ["/healthz", "/readyz"], "description": "ALL paths must return 2xx for the primary to count as healthy." },
+        "timeoutMs": { "type": "integer", "minimum": 200, "maximum": 30000, "default": 3000 },
+        "failThreshold": { "type": "integer", "minimum": 1, "maximum": 10, "default": 2, "description": "Consecutive failed probes before the primary is marked down." },
+        "recoverThreshold": { "type": "integer", "minimum": 1, "maximum": 10, "default": 2, "description": "Consecutive successful probes before the primary is marked up again." },
+        "staleAfterSeconds": { "type": "integer", "minimum": 30, "maximum": 3600, "default": 180, "description": "If the last probe result is older than this, treat health as unknown and fall back to per-request probing." }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["primary"],
+      "properties": {
+        "primary": { "$ref": "#/$defs/origin" },
+        "fallback": { "$ref": "#/$defs/origin" },
+        "health": { "$ref": "#/$defs/health" },
+        "access": { "type": "string", "enum": ["public", "cloudflare-access", "deny"], "default": "public", "description": "cloudflare-access requires a Cloudflare Access assertion header (admin/api-admin per AGENTS.md); deny returns 404 always." },
+        "retryOnPrimaryError": { "type": "boolean", "default": true, "description": "On 502/503/504/timeout from the primary, retry idempotent requests against the fallback within the same request." },
+        "websocket": { "type": "boolean", "default": true, "description": "Pass Upgrade: websocket through unchanged." }
+      }
+    }
+  }
+}

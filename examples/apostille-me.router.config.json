@@ -1,0 +1,20 @@
+{
+  "$schema": "../schemas/router.config.schema.json",
+  "org": "apostille-me",
+  "domain": "apostille.me",
+  "linearProject": "https://linear.app/denman/project/githubcomapostille-me",
+  "gcpProject": "apostille-me",
+  "health": { "paths": ["/healthz", "/readyz"], "timeoutMs": 3000, "failThreshold": 2, "recoverThreshold": 2 },
+  "hosts": {
+    "auth":      { "primary": { "url": "https://origin-hetzner.ores-shared-auth.com", "kind": "k8s", "hostHeader": "auth.apostille.me" },
+                   "fallback": { "url": "https://shared-auth-server-REPLACE.a.run.app", "kind": "cloudrun", "hostHeader": "shared-auth-server-REPLACE.a.run.app" } },
+    "org":       { "primary": { "url": "https://origin-hetzner.apostille.me", "kind": "k8s" },
+                   "fallback": { "url": "https://apme-web-server-REPLACE.a.run.app", "kind": "cloudrun", "hostHeader": "apme-web-server-REPLACE.a.run.app" } },
+    "user":      { "primary": { "url": "https://origin-hetzner.apostille.me", "kind": "k8s" },
+                   "fallback": { "url": "https://apme-web-server-REPLACE.a.run.app", "kind": "cloudrun", "hostHeader": "apme-web-server-REPLACE.a.run.app" } },
+    "api":       { "primary": { "url": "https://origin-hetzner.apostille.me", "kind": "k8s" },
+                   "fallback": { "url": "https://apme-api-server-REPLACE.a.run.app", "kind": "cloudrun", "hostHeader": "apme-api-server-REPLACE.a.run.app" } },
+    "admin":     { "primary": { "url": "https://origin-hetzner.apostille.me", "kind": "k8s" }, "access": "cloudflare-access" },
+    "api-admin": { "primary": { "url": "https://origin-hetzner.apostille.me", "kind": "k8s" }, "access": "cloudflare-access" }
+  }
+}

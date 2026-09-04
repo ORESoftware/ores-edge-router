@@ -1,0 +1,18 @@
+{
+  "$schema": "../schemas/router.config.schema.json",
+  "org": "zed-pkg",
+  "domain": "zpkg.net",
+  "linearProject": "https://linear.app/denman/project/zpkg-self-hosted-registries-and-private-deps-a81fb2098a17",
+  "hosts": {
+    "registry": { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" },
+                  "fallback": { "url": "https://cdn.zpkg.net", "kind": "cdn", "mode": "redirect", "hostHeader": "cdn.zpkg.net" },
+                  "health": { "paths": ["/healthz", "/readyz"], "failThreshold": 3 } },
+    "api":      { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" },
+                  "fallback": { "url": "https://zed-api-server-REPLACE.a.run.app", "kind": "cloudrun", "hostHeader": "zed-api-server-REPLACE.a.run.app" } },
+    "web":      { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" },
+                  "fallback": { "url": "https://zed-pkg.github.io", "kind": "pages", "mode": "redirect", "hostHeader": "zed-pkg.github.io" } },
+    "auth":     { "primary": { "url": "https://origin-hetzner.ores-shared-auth.com", "kind": "k8s", "hostHeader": "auth.zpkg.net" } },
+    "admin":    { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" } },
+    "api-admin":{ "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" } }
+  }
+}

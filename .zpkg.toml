@@ -1,0 +1,25 @@
+[package]
+org = "ORESoftware"
+name = "ores-edge-router"
+version = "0.1.0"
+kind = "library"
+language = "typescript"
+
+[package.repository]
+url = "https://github.com/ORESoftware/ores-edge-router"
+
+[dependencies]
+
+[build]
+command = "npm test"
+
+[install]
+command = "npm install --omit=dev"
+
+[publish]
+include = ["src/**", "scripts/**", "schemas/**", "package.json", "README.md", "LICENSE"]
+
+[scripts]
+test = "npm test"
+render = "node scripts/render-wrangler.mjs"
+validate = "node scripts/validate-config.mjs"
