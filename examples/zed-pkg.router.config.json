@@ -4,15 +4,69 @@
   "domain": "zpkg.net",
   "linearProject": "https://linear.app/denman/project/zpkg-self-hosted-registries-and-private-deps-a81fb2098a17",
   "hosts": {
-    "registry": { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" },
-                  "fallback": { "url": "https://cdn.zpkg.net", "kind": "cdn", "mode": "redirect", "hostHeader": "cdn.zpkg.net" },
-                  "health": { "paths": ["/healthz", "/readyz"], "failThreshold": 3 } },
-    "api":      { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" },
-                  "fallback": { "url": "https://zed-api-server-REPLACE.a.run.app", "kind": "cloudrun", "hostHeader": "zed-api-server-REPLACE.a.run.app" } },
-    "web":      { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" },
-                  "fallback": { "url": "https://zed-pkg.github.io", "kind": "pages", "mode": "redirect", "hostHeader": "zed-pkg.github.io" } },
-    "auth":     { "primary": { "url": "https://origin-hetzner.ores-shared-auth.com", "kind": "k8s", "hostHeader": "auth.zpkg.net" } },
-    "admin":    { "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" } },
-    "api-admin":{ "primary": { "url": "https://origin-hetzner.zpkg.net", "kind": "k8s" } }
-  }
+    "registry": {
+      "primary": {
+        "url": "https://registry-origin.zpkg.net",
+        "kind": "tunnel",
+        "hostHeader": "registry.zpkg.net"
+      },
+      "fallback": {
+        "mode": "unavailable",
+        "kind": "other",
+        "retryAfter": 5
+      },
+      "health": {
+        "paths": [
+          "/healthz",
+          "/readyz"
+        ],
+        "failThreshold": 3
+      }
+    },
+    "api": {
+      "primary": {
+        "url": "https://api-origin.zpkg.net",
+        "kind": "tunnel",
+        "hostHeader": "api.zpkg.net"
+      },
+      "fallback": {
+        "mode": "unavailable",
+        "kind": "other",
+        "retryAfter": 5
+      }
+    },
+    "web": {
+      "primary": {
+        "url": "https://web-origin.zpkg.net",
+        "kind": "tunnel",
+        "hostHeader": "web.zpkg.net"
+      },
+      "fallback": {
+        "url": "https://zpkg.net",
+        "kind": "pages",
+        "mode": "redirect",
+        "hostHeader": "zpkg.net"
+      }
+    },
+    "auth": {
+      "primary": {
+        "url": "https://origin-hetzner.ores-shared-auth.com",
+        "kind": "k8s",
+        "hostHeader": "auth.zpkg.net"
+      }
+    },
+    "admin": {
+      "primary": {
+        "url": "https://origin-hetzner.zpkg.net",
+        "kind": "k8s"
+      }
+    },
+    "api-admin": {
+      "primary": {
+        "url": "https://origin-hetzner.zpkg.net",
+        "kind": "k8s"
+      }
+    }
+  },
+  "$comment": "Live state 2026-09-04: registry./api./web.zpkg.net CNAME to the operator-workstation tunnel (zed-infra/docs/dns-zpkg-net.md) and currently answer 502; cdn.zpkg.net (R2) and zpkg.net (Pages) are up. Add proxied CNAMEs <label>-origin.zpkg.net -> the same tunnel so the Worker can front <label>.zpkg.net without route recursion, then failover goes to R2/Pages. Replace the tunnel origins with origin-hetzner.zpkg.net once DEN-534/535 promote the cluster. registry./api. fall back to a controlled 503 (zed-cli then uses its own GitHub/R2 fallback); web. redirects to the Pages site."
 }

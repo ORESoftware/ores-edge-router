@@ -38,6 +38,11 @@ async function readState(env, config, host, now) {
 }
 
 async function proxy(request, origin, host) {
+  if (origin.mode === 'unavailable') {
+    return new Response(JSON.stringify({ error: 'origin_unavailable', host: host.publicHost, retryAfter: origin.retryAfter }), {
+      status: 503, headers: { 'content-type': 'application/json', 'retry-after': String(origin.retryAfter), 'cache-control': 'no-store' },
+    });
+  }
   const url = upstreamUrl(origin, request.url);
   if (origin.mode === 'redirect') {
     return Response.redirect(url.toString(), 302);

@@ -28,13 +28,18 @@ const ORIGIN_URL_RE = /^https:\/\/[^/\s]+$/;
 
 function normalizeOrigin(raw, path, publicHost) {
   if (!raw || typeof raw !== 'object') throw new ConfigError('origin must be an object', path);
+  if (raw.mode === 'unavailable') {
+    // Controlled outage answer: JSON 503 + Retry-After so API clients keep their own retry/fallback
+    // logic instead of being redirected somewhere that answers 404. No url needed.
+    return Object.freeze({ url: null, hostHeader: publicHost, kind: raw.kind ?? 'other', mode: 'unavailable', pathPrefix: '', retryAfter: raw.retryAfter ?? 5 });
+  }
   if (typeof raw.url !== 'string' || !ORIGIN_URL_RE.test(raw.url)) {
     throw new ConfigError('origin.url must be https://host[:port] with no path', `${path}.url`);
   }
   const kind = raw.kind ?? 'other';
   if (!ORIGIN_KINDS.has(kind)) throw new ConfigError(`unknown origin kind ${kind}`, `${path}.kind`);
   const mode = raw.mode ?? 'proxy';
-  if (mode !== 'proxy' && mode !== 'redirect') throw new ConfigError(`mode must be proxy|redirect`, `${path}.mode`);
+  if (mode !== 'proxy' && mode !== 'redirect') throw new ConfigError(`mode must be proxy|redirect|unavailable`, `${path}.mode`);
   const pathPrefix = raw.pathPrefix ?? '';
   if (typeof pathPrefix !== 'string' || (pathPrefix && !pathPrefix.startsWith('/'))) {
     throw new ConfigError('pathPrefix must be empty or start with /', `${path}.pathPrefix`);

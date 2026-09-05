@@ -46,6 +46,15 @@ DNS records for the six subdomains are proxied CNAMEs/A records managed in
 `ores/cloudflare-infra` (Terraform); Worker routes are owned by this
 `wrangler.toml`, per the split documented there.
 
+## Precedent and reconciliation
+
+`shared-auth-infra/workers/shared-auth-gateway` (ores-shared-auth.com) already implements the same
+semantics for one zone — `/readyz`-gated ordered origins, safe-method failover on network errors /
+502-504, controlled JSON 503 with `Retry-After` when nothing is ready — and honeypot-r-us
+(`hnpt-edge-router-prod`) and 3FA (`multiapp-gateway`) run bespoke workers. This repo is the
+fleet-wide, config-driven form of that pattern; those three should converge on it (or feed
+their extra behaviour back here) so every org runs identical edge code.
+
 ## Design notes
 
 - Pure decision functions (`src/routing.mjs`, `src/health.mjs#transition`) are

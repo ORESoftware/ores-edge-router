@@ -130,3 +130,10 @@ test('routing: accessGate', () => {
   const deny = normalizeConfig({ org: 'x', domain: 'x.io', hosts: { admin: { primary: { url: 'https://a' }, access: 'deny' } } });
   assert.equal(accessGate(deny.hosts.admin, new Headers({ 'cf-access-jwt-assertion': 'x' })).status, 404);
 });
+
+test('config: unavailable fallback needs no url and chooseOrigin returns it when primary is down', () => {
+  const c = normalizeConfig({ org: 'x', domain: 'x.io', hosts: { api: { primary: { url: 'https://a' }, fallback: { mode: 'unavailable', retryAfter: 7 } } } });
+  assert.equal(c.hosts.api.fallback.mode, 'unavailable');
+  assert.equal(c.hosts.api.fallback.retryAfter, 7);
+  assert.equal(chooseOrigin(c.hosts.api, { up: false, checkedAt: 1000 }, 2000).origin.mode, 'unavailable');
+});

@@ -25,12 +25,12 @@
     "origin": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["url"],
       "properties": {
         "url": { "type": "string", "pattern": "^https://[^/\\s]+$", "description": "Scheme + host (+ optional :port) of the origin; no path." },
         "hostHeader": { "type": "string", "description": "Host header to send. Defaults to the public hostname (<label>.<domain>) so the k8s ingress can route by host." },
         "kind": { "type": "string", "enum": ["k8s", "cloudrun", "cdn", "github", "pages", "tunnel", "other"], "default": "other" },
-        "mode": { "type": "string", "enum": ["proxy", "redirect"], "default": "proxy", "description": "proxy = fetch from origin and stream back; redirect = 302 the client to the origin (for CDN/GitHub fallbacks that cannot serve arbitrary paths)." },
+        "mode": { "type": "string", "enum": ["proxy", "redirect", "unavailable"], "default": "proxy", "description": "proxy = fetch from origin and stream back; redirect = 302 the client to the origin (for CDN/GitHub fallbacks that cannot serve arbitrary paths); unavailable = answer a controlled JSON 503 with Retry-After (url not required) so API clients keep their own retry/fallback behaviour." },
+        "retryAfter": { "type": "integer", "minimum": 1, "maximum": 3600, "default": 5 },
         "pathPrefix": { "type": "string", "default": "", "description": "Prefix prepended to the request path at this origin (e.g. /releases/download)." }
       }
     },

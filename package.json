@@ -1,6 +1,6 @@
 {
   "name": "@oresoftware/ores-edge-router",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Cloudflare Worker that fronts every ORESoftware org domain and routes each canonical subdomain to the k8s-cluster origin when /healthz and /readyz pass, otherwise to the Cloud Run (or CDN/GitHub) fallback origin.",
   "type": "module",
   "license": "MIT",
