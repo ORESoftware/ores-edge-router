@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/ORESoftware/ores-edge-router/schemas/router.config.schema.json",
   "title": "OresEdgeRouterConfig",
-  "description": "Per-org edge routing contract: which subdomains exist on the org's apex domain, which origin is primary (k8s-cluster) and which is the fallback (Cloud Run / CDN / GitHub), and how health is probed. This file is the single authority for the org's Cloudflare edge; wrangler.toml is rendered from it.",
+  "description": "Per-org edge routing contract: which subdomains exist on the org's apex domain, which origin is primary (k8s-cluster) and which is the fallback (Cloud Run / CDN / GitHub), and how health is probed. This independently authored JSON Schema Draft 2020-12 authority must converge with an independently authored TypeSpec peer; wrangler.toml is a derived projection.",
   "type": "object",
   "additionalProperties": false,
   "required": ["org", "domain", "hosts"],
@@ -12,6 +12,7 @@
     "domain": { "type": "string", "pattern": "^[a-z0-9-]+(\\.[a-z0-9-]+)+$", "description": "Apex domain owned by the org and served by Cloudflare." },
     "linearProject": { "type": "string", "description": "Linear project URL recording this routing implementation (AGENTS.md 1:1:1:1 convention)." },
     "gcpProject": { "type": "string", "description": "GCP project id hosting the Cloud Run fallbacks." },
+    "statusAccess": { "type": "string", "enum": ["public", "cloudflare-access", "deny"], "default": "cloudflare-access", "description": "Access policy for /__ores/router/status. The router liveness endpoint /__ores/router/healthz remains public." },
     "health": { "$ref": "#/$defs/health" },
     "hosts": {
       "type": "object",

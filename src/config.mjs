@@ -92,6 +92,13 @@ export function normalizeConfig(raw) {
     throw new ConfigError('hosts must be a non-empty object keyed by subdomain label', '$.hosts');
   }
   const health = normalizeHealth(raw.health, '$.health');
+  const statusAccess = raw.statusAccess ?? 'cloudflare-access';
+  if (!ACCESS_MODES.has(statusAccess)) {
+    throw new ConfigError(
+      'statusAccess must be public|cloudflare-access|deny',
+      '$.statusAccess',
+    );
+  }
   const outHosts = {};
   for (const [label, h] of Object.entries(hosts)) {
     const p = `$.hosts.${label}`;
@@ -118,6 +125,7 @@ export function normalizeConfig(raw) {
     domain,
     linearProject: raw.linearProject ?? null,
     gcpProject: raw.gcpProject ?? null,
+    statusAccess,
     health,
     hosts: Object.freeze(outHosts),
   });
