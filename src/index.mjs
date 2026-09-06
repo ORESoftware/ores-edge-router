@@ -60,7 +60,7 @@ async function proxy(request, origin, host) {
   return fetch(url.toString(), init);
 }
 
-async function handleFetch(request, env, ctx) {
+export async function handleFetch(request, env, ctx) {
   const now = Date.now();
   let config;
   try {
@@ -73,10 +73,18 @@ async function handleFetch(request, env, ctx) {
   // Router's own health, distinct from origin health.
   if (url.pathname === '/__ores/router/healthz') return new Response('ok', { status: 200 });
   if (url.pathname === '/__ores/router/status') {
+    const gate = accessGate({ access: config.statusAccess }, request.headers);
+    if (gate) {
+      gate.headers.set('cache-control', 'no-store');
+      return gate;
+    }
     const entries = await Promise.all(
       Object.values(config.hosts).map(async (h) => [h.label, (await readState(env, config, h, now)) ?? INITIAL_STATE]),
     );
-    return Response.json({ org: config.org, domain: config.domain, hosts: Object.fromEntries(entries) });
+    return Response.json(
+      { org: config.org, domain: config.domain, hosts: Object.fromEntries(entries) },
+      { headers: { 'cache-control': 'no-store' } },
+    );
   }
 
   const host = matchHost(config, url.hostname);

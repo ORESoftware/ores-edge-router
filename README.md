@@ -18,8 +18,11 @@ connection error from the primary is retried against the fallback in the same
 request, so a fresh outage is covered before the cron notices it.
 
 Every response carries `x-ores-origin: k8s|cloudrun|cdn|github|pages` and
-`x-ores-route: <reason>`. `GET https://<any host>/__ores/router/status` dumps
-the health table; `/__ores/router/healthz` is the router's own liveness.
+`x-ores-route: <reason>`. `/__ores/router/healthz` is always public for
+router liveness. `GET https://<any host>/__ores/router/status` returns the
+per-host health table only after the top-level `statusAccess` policy passes;
+it defaults to `cloudflare-access`, can be made explicitly `public`, or can
+be disabled with `deny`. Status and access-failure responses are `no-store`.
 
 ## How an org adopts it
 
@@ -66,6 +69,8 @@ their extra behaviour back here) so every org runs identical edge code.
   origin cover a dynamic host's outage for the paths it can serve.
 - Admin subdomains default to `access: cloudflare-access` and are refused when
   no Access assertion is present, matching the "no public ingress" rule.
+- The router status endpoint separately defaults to `statusAccess: cloudflare-access`;
+  its gate runs before KV health state is read.
 - Non-idempotent requests are never replayed against the fallback.
 
 ## Layout
