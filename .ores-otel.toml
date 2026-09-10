@@ -1,0 +1,24 @@
+# Server/edge routing telemetry policy. Runtime endpoint values remain in environment/secrets.
+version = 1
+
+[server]
+enabled = true
+service_name = "ores-edge-router"
+
+[server.logging]
+enabled = true
+level = "info"
+console = true
+auto_send = false
+
+[server.tracing]
+enabled = true
+sample_ratio = 1.0
+propagators = ["tracecontext", "baggage"]
+
+[server.metrics]
+enabled = true
+
+[server.exporter]
+protocol = "otlp_grpc"
+endpoint_env = "ORES_EDGE_ROUTER_OTEL_ENDPOINT"
