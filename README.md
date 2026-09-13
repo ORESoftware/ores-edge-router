@@ -24,6 +24,51 @@ per-host health table only after the top-level `statusAccess` policy passes;
 it defaults to `cloudflare-access`, can be made explicitly `public`, or can
 be disabled with `deny`. Status and access-failure responses are `no-store`.
 
+## Cloudflare Access verification
+
+`access: "cloudflare-access"` is a cryptographic policy, not a header-presence
+check. The Worker verifies `Cf-Access-Jwt-Assertion` using Cloudflare Access's
+remote JWKS and checks the expected issuer and application audience. The
+`Cf-Access-Authenticated-User-Email` header alone never authenticates a
+request.
+
+Configure the Worker with:
+
+```text
+CF_ACCESS_TEAM_DOMAIN=https://<team>.cloudflareaccess.com
+CF_ACCESS_AUD=<application-aud-tag>
+```
+
+If different protected hosts use different Access applications, use a JSON
+map instead of one global audience:
+
+```text
+CF_ACCESS_AUDIENCES={"admin":"<aud-admin>","api-admin":"<aud-api-admin>","admin.example.com":"<aud-host-specific>"}
+```
+
+`CF_ACCESS_AUDIENCES` may be keyed by router label or full public hostname; a
+full-host match wins. A protected route with no verifier configuration returns
+503 rather than silently downgrading authentication. Missing, malformed,
+expired, wrong-issuer, wrong-audience, or bad-signature assertions return 403.
+
+Access credentials are also an edge-only concern: the Worker strips the Access
+JWT, authenticated-user header, and the `CF_Authorization` cookie before the
+request reaches the application origin.
+
+## Trusted proxy boundary
+
+Incoming forwarding and ORES-routing metadata is untrusted. Before proxying,
+the Worker removes hop-by-hop headers (including every header named by the
+incoming `Connection` field), `Forwarded`, `X-Forwarded-*`, `X-Real-IP`,
+`X-Ores-*`, and Cloudflare Access identity material. It then reconstructs
+`Host`, `X-Forwarded-Host`, `X-Forwarded-Proto`, and `X-Forwarded-For` from
+trusted Worker context. `Connection: Upgrade` and `Upgrade: websocket` are
+re-created only for an explicitly enabled WebSocket route.
+
+This prevents callers from smuggling a fake project/session/service identity or
+spoofing the client/proxy chain through headers that happen to survive multiple
+reverse proxies.
+
 ## How an org adopts it
 
 The contract for an org is a single `router.config.json` (validated by
@@ -62,13 +107,15 @@ their extra behaviour back here) so every org runs identical edge code.
 
 - Pure decision functions (`src/routing.mjs`, `src/health.mjs#transition`) are
   separated from effects (`src/index.mjs`), and are unit-tested with
-  `node --test`; no network in tests.
+  `node --test`.
+- Access verification lives in `src/access.mjs`; tests inject a verifier so JWT
+  policy is exercised without network calls.
 - Health is probed with the same `Host` header traffic uses, so a readiness
   failure of the specific ingress route — not just the node — flips traffic.
 - `mode: "redirect"` fallbacks (R2 `cdn.zpkg.net`, GitHub Pages) let a static
   origin cover a dynamic host's outage for the paths it can serve.
-- Admin subdomains default to `access: cloudflare-access` and are refused when
-  no Access assertion is present, matching the "no public ingress" rule.
+- Admin subdomains default to `access: cloudflare-access` and fail closed unless
+  the Access JWT verifies for the configured issuer and audience.
 - The router status endpoint separately defaults to `statusAccess: cloudflare-access`;
   its gate runs before KV health state is read.
 - Non-idempotent requests are never replayed against the fallback.
@@ -76,7 +123,7 @@ their extra behaviour back here) so every org runs identical edge code.
 ## Layout
 
 ```
-src/            worker (config, health, routing, index)
+src/            worker (access, config, health, routing, index)
 schemas/        router.config.schema.json — the contract
 scripts/        render-wrangler.mjs, validate-config.mjs
 examples/       apostille-me, zed-pkg (zpkg.net with CDN/GitHub fallbacks)
