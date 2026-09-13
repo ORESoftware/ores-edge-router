@@ -13,6 +13,8 @@ function statusEnv(statusAccess) {
   if (statusAccess !== undefined) config.statusAccess = statusAccess;
   return {
     ROUTER_CONFIG: JSON.stringify(config),
+    CF_ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com',
+    CF_ACCESS_AUD: 'status-aud',
     HEALTH: {
       async get() {
         throw new Error('status gate must run before KV is read');
@@ -22,6 +24,11 @@ function statusEnv(statusAccess) {
 }
 
 const ctx = { waitUntil() {} };
+const verifyAccessJwt = async (_token, _key, options) => {
+  assert.equal(options.issuer, 'https://team.cloudflareaccess.com');
+  assert.equal(options.audience, 'status-aud');
+  return { payload: { sub: 'operator' } };
+};
 
 test('status config defaults to Cloudflare Access and rejects unknown policies', () => {
   const base = {
@@ -41,12 +48,13 @@ test('router status default denies before reading health KV', async () => {
     new Request('https://api.x.io/__ores/router/status'),
     statusEnv(undefined),
     ctx,
+    { verifyAccessJwt },
   );
   assert.equal(response.status, 403);
   assert.equal(response.headers.get('cache-control'), 'no-store');
 });
 
-test('router status accepts Access assertion and returns a non-cacheable table', async () => {
+test('router status accepts verified Access assertion and returns a non-cacheable table', async () => {
   const env = statusEnv(undefined);
   env.HEALTH.get = async () => null;
   const response = await handleFetch(
@@ -55,6 +63,7 @@ test('router status accepts Access assertion and returns a non-cacheable table',
     }),
     env,
     ctx,
+    { verifyAccessJwt },
   );
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('cache-control'), 'no-store');
@@ -80,6 +89,7 @@ test('router status public mode is explicit and deny mode stays indistinguishabl
     }),
     statusEnv('deny'),
     ctx,
+    { verifyAccessJwt },
   );
   assert.equal(denied.status, 404);
   assert.equal(denied.headers.get('cache-control'), 'no-store');
@@ -92,5 +102,6 @@ test('router healthz remains public when status access is deny', async () => {
     ctx,
   );
   assert.equal(response.status, 200);
+  assert.equal(response.headers.get('cache-control'), 'no-store');
   assert.equal(await response.text(), 'ok');
 });

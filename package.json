@@ -12,6 +12,9 @@
     "dev": "wrangler dev",
     "deploy": "wrangler deploy"
   },
+  "dependencies": {
+    "jose": "6.2.12"
+  },
   "devDependencies": {
     "wrangler": "^4.30.0"
   }

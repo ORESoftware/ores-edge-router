@@ -28,6 +28,9 @@ jobs:
         with:
           node-version: 22
 
+      - name: Install production dependencies
+        run: npm install --omit=dev --ignore-scripts --no-audit --no-fund
+
       - name: Unit and repository-hygiene tests
         run: npm test
 
