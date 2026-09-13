@@ -73,12 +73,17 @@ async function proxy(request, origin, host) {
   return fetch(url.toString(), init);
 }
 
-export async function handleFetch(request, env, ctx) {
+/**
+ * The optional deps object exists only to make cryptographic policy testable
+ * without network/JWKS I/O. Production Workers call this with the normal three
+ * arguments, so accessGate uses jose.jwtVerify.
+ */
+export async function handleFetch(request, env, ctx, deps = {}) {
   const now = Date.now();
   let config;
   try {
     config = loadConfig(env);
-  } catch (err) {
+  } catch {
     return new Response('router misconfigured', {
       status: 500,
       headers: { 'cache-control': 'no-store' },
@@ -99,8 +104,16 @@ export async function handleFetch(request, env, ctx) {
       label: '__status',
       publicHost: url.hostname,
     };
-    const gate = await accessGate(statusHost, request.headers, env);
-    if (gate) return gate;
+    const gate = await accessGate(
+      statusHost,
+      request.headers,
+      env,
+      deps.verifyAccessJwt,
+    );
+    if (gate) {
+      gate.headers.set('cache-control', 'no-store');
+      return gate;
+    }
 
     const entries = await Promise.all(
       Object.values(config.hosts).map(async (h) => [h.label, (await readState(env, config, h, now)) ?? INITIAL_STATE]),
@@ -114,8 +127,11 @@ export async function handleFetch(request, env, ctx) {
   const host = matchHost(config, url.hostname);
   if (!host) return new Response('Not Found', { status: 404 });
 
-  const gate = await accessGate(host, request.headers, env);
-  if (gate) return gate;
+  const gate = await accessGate(host, request.headers, env, deps.verifyAccessJwt);
+  if (gate) {
+    gate.headers.set('cache-control', 'no-store');
+    return gate;
+  }
 
   const state = await readState(env, config, host, now);
   const decision = chooseOrigin(host, state, now);
