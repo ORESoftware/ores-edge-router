@@ -113,22 +113,90 @@ test('routing: upstreamUrl keeps path+query and applies pathPrefix', () => {
   assert.equal(upstreamUrl(o, 'https://registry.zpkg.net/pkg/a?b=1').toString(), 'https://cdn.zpkg.net/artifacts/pkg/a?b=1');
 });
 
-test('routing: upstreamHeaders sets Host and forwarded headers, strips hop-by-hop', () => {
-  const h = upstreamHeaders(new Headers({ host: 'api.apostille.me', 'transfer-encoding': 'chunked', 'x-a': '1' }), { hostHeader: 'origin.internal' }, '1.2.3.4');
+test('routing: upstreamHeaders rebuilds forwarding metadata and strips reserved headers', () => {
+  const input = new Headers({
+    host: 'api.apostille.me',
+    connection: 'keep-alive, x-remove',
+    'x-remove': 'smuggled',
+    'transfer-encoding': 'chunked',
+    'x-forwarded-for': '203.0.113.99',
+    'x-forwarded-host': 'evil.example',
+    'x-ores-project': 'attacker-project',
+    'cf-access-jwt-assertion': 'secret-token',
+    'cf-access-authenticated-user-email': 'spoof@example.com',
+    cookie: 'session=ok; CF_Authorization=secret; theme=dark',
+    'x-a': '1',
+  });
+  const h = upstreamHeaders(input, { hostHeader: 'origin.internal' }, '1.2.3.4', 'api.apostille.me');
   assert.equal(h.get('host'), 'origin.internal');
   assert.equal(h.get('x-forwarded-host'), 'api.apostille.me');
   assert.equal(h.get('x-forwarded-for'), '1.2.3.4');
+  assert.equal(h.get('x-forwarded-proto'), 'https');
+  assert.equal(h.get('connection'), null);
   assert.equal(h.get('transfer-encoding'), null);
+  assert.equal(h.get('x-remove'), null);
+  assert.equal(h.get('x-ores-project'), null);
+  assert.equal(h.get('cf-access-jwt-assertion'), null);
+  assert.equal(h.get('cf-access-authenticated-user-email'), null);
+  assert.equal(h.get('cookie'), 'session=ok; theme=dark');
   assert.equal(h.get('x-a'), '1');
 });
 
-test('routing: accessGate', () => {
+test('routing: websocket headers are reconstructed only when explicitly admitted', () => {
+  const input = new Headers({ connection: 'Upgrade', upgrade: 'websocket', 'x-a': '1' });
+  const normal = upstreamHeaders(input, { hostHeader: 'origin.internal' }, null, 'api.example');
+  assert.equal(normal.get('connection'), null);
+  assert.equal(normal.get('upgrade'), null);
+
+  const websocket = upstreamHeaders(input, { hostHeader: 'origin.internal' }, null, 'api.example', { websocket: true });
+  assert.equal(websocket.get('connection'), 'Upgrade');
+  assert.equal(websocket.get('upgrade'), 'websocket');
+});
+
+test('routing: accessGate requires cryptographically verified Access JWT', async () => {
   const c = example();
-  assert.equal(accessGate(c.hosts.api, new Headers()), null);
-  assert.equal(accessGate(c.hosts.admin, new Headers()).status, 403);
-  assert.equal(accessGate(c.hosts.admin, new Headers({ 'cf-access-jwt-assertion': 'x' })), null);
+  assert.equal(await accessGate(c.hosts.api, new Headers(), {}), null);
+  assert.equal((await accessGate(c.hosts.admin, new Headers(), {})).status, 403);
+  assert.equal((await accessGate(c.hosts.admin, new Headers({ 'cf-access-authenticated-user-email': 'spoof@example.com' }), {})).status, 403);
+
+  const env = {
+    CF_ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com',
+    CF_ACCESS_AUD: 'audience-1',
+  };
+  let observedOptions;
+  const verifier = async (_token, _key, options) => {
+    observedOptions = options;
+    return { payload: { sub: 'user-1' } };
+  };
+  const allowed = await accessGate(
+    c.hosts.admin,
+    new Headers({ 'cf-access-jwt-assertion': 'signed-token' }),
+    env,
+    verifier,
+  );
+  assert.equal(allowed, null);
+  assert.equal(observedOptions.issuer, 'https://team.cloudflareaccess.com');
+  assert.equal(observedOptions.audience, 'audience-1');
+  assert.deepEqual(observedOptions.algorithms, ['RS256']);
+
+  const denied = await accessGate(
+    c.hosts.admin,
+    new Headers({ 'cf-access-jwt-assertion': 'bad-token' }),
+    env,
+    async () => { throw new Error('invalid signature'); },
+  );
+  assert.equal(denied.status, 403);
+
+  const misconfigured = await accessGate(
+    c.hosts.admin,
+    new Headers({ 'cf-access-jwt-assertion': 'token' }),
+    { CF_ACCESS_TEAM_DOMAIN: 'https://team.cloudflareaccess.com' },
+    verifier,
+  );
+  assert.equal(misconfigured.status, 503);
+
   const deny = normalizeConfig({ org: 'x', domain: 'x.io', hosts: { admin: { primary: { url: 'https://a' }, access: 'deny' } } });
-  assert.equal(accessGate(deny.hosts.admin, new Headers({ 'cf-access-jwt-assertion': 'x' })).status, 404);
+  assert.equal((await accessGate(deny.hosts.admin, new Headers({ 'cf-access-jwt-assertion': 'x' }), env, verifier)).status, 404);
 });
 
 test('config: unavailable fallback needs no url and chooseOrigin returns it when primary is down', () => {
