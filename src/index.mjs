@@ -40,21 +40,34 @@ async function readState(env, config, host, now) {
 async function proxy(request, origin, host) {
   if (origin.mode === 'unavailable') {
     return new Response(JSON.stringify({ error: 'origin_unavailable', host: host.publicHost, retryAfter: origin.retryAfter }), {
-      status: 503, headers: { 'content-type': 'application/json', 'retry-after': String(origin.retryAfter), 'cache-control': 'no-store' },
+      status: 503,
+      headers: {
+        'content-type': 'application/json',
+        'retry-after': String(origin.retryAfter),
+        'cache-control': 'no-store',
+      },
     });
   }
   const url = upstreamUrl(origin, request.url);
   if (origin.mode === 'redirect') {
     return Response.redirect(url.toString(), 302);
   }
-  const headers = upstreamHeaders(request.headers, origin, request.headers.get('cf-connecting-ip'));
+
+  const websocket = host.websocket && request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+  const headers = upstreamHeaders(
+    request.headers,
+    origin,
+    request.headers.get('cf-connecting-ip'),
+    host.publicHost,
+    { websocket },
+  );
   const init = {
     method: request.method,
     headers,
     body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
     redirect: 'manual',
   };
-  if (host.websocket && request.headers.get('upgrade')?.toLowerCase() === 'websocket') {
+  if (websocket) {
     return fetch(url.toString(), init); // Workers pass 101 upgrades through unchanged
   }
   return fetch(url.toString(), init);
@@ -66,18 +79,29 @@ export async function handleFetch(request, env, ctx) {
   try {
     config = loadConfig(env);
   } catch (err) {
-    return new Response(`router misconfigured: ${err.message}`, { status: 500 });
+    return new Response('router misconfigured', {
+      status: 500,
+      headers: { 'cache-control': 'no-store' },
+    });
   }
   const url = new URL(request.url);
 
-  // Router's own health, distinct from origin health.
-  if (url.pathname === '/__ores/router/healthz') return new Response('ok', { status: 200 });
+  // Router's own liveness is deliberately unauthenticated and content-free.
+  if (url.pathname === '/__ores/router/healthz') {
+    return new Response('ok', {
+      status: 200,
+      headers: { 'cache-control': 'no-store' },
+    });
+  }
   if (url.pathname === '/__ores/router/status') {
-    const gate = accessGate({ access: config.statusAccess }, request.headers);
-    if (gate) {
-      gate.headers.set('cache-control', 'no-store');
-      return gate;
-    }
+    const statusHost = {
+      access: config.statusAccess,
+      label: '__status',
+      publicHost: url.hostname,
+    };
+    const gate = await accessGate(statusHost, request.headers, env);
+    if (gate) return gate;
+
     const entries = await Promise.all(
       Object.values(config.hosts).map(async (h) => [h.label, (await readState(env, config, h, now)) ?? INITIAL_STATE]),
     );
@@ -88,9 +112,9 @@ export async function handleFetch(request, env, ctx) {
   }
 
   const host = matchHost(config, url.hostname);
-  if (!host) return new Response(`no route for ${url.hostname}`, { status: 404 });
+  if (!host) return new Response('Not Found', { status: 404 });
 
-  const gate = accessGate(host, request.headers);
+  const gate = await accessGate(host, request.headers, env);
   if (gate) return gate;
 
   const state = await readState(env, config, host, now);
@@ -100,9 +124,12 @@ export async function handleFetch(request, env, ctx) {
   let networkError = false;
   try {
     res = await proxy(request, decision.origin, host);
-  } catch (err) {
+  } catch {
     networkError = true;
-    res = new Response(`upstream error: ${err?.message ?? err}`, { status: 502 });
+    res = new Response('Bad Gateway', {
+      status: 502,
+      headers: { 'cache-control': 'no-store' },
+    });
   }
 
   let servedBy = decision.origin;
@@ -116,7 +143,7 @@ export async function handleFetch(request, env, ctx) {
       // Nudge the health record so the cron sees a failure sooner. Fire-and-forget.
       ctx.waitUntil(markPrimarySuspect(env, config, host, now));
     } catch {
-      // keep the primary's error response
+      // Keep the primary's generic error response.
     }
   }
 
@@ -148,7 +175,14 @@ async function handleScheduled(_event, env, ctx) {
   );
   for (const r of results) {
     if (r.prev.up !== r.next.up) {
-      console.log(JSON.stringify({ level: 'warn', event: 'health-transition', key: r.key, from: r.prev.up ? 'up' : 'down', to: r.next.up ? 'up' : 'down', error: r.next.lastError }));
+      console.log(JSON.stringify({
+        level: 'warn',
+        event: 'health-transition',
+        key: r.key,
+        from: r.prev.up ? 'up' : 'down',
+        to: r.next.up ? 'up' : 'down',
+        error: r.next.lastError,
+      }));
     }
   }
   ctx.waitUntil(Promise.resolve());
