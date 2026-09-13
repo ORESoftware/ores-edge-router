@@ -1,9 +1,28 @@
-// Pure routing decisions. No I/O here.
+// Pure routing decisions except the Access verification gate, which delegates
+// signature verification to src/access.mjs.
 
+import { verifyCloudflareAccess } from './access.mjs';
 import { isStale } from './health.mjs';
 
 const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS']);
-const HOP_BY_HOP = ['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade'];
+const HOP_BY_HOP = new Set([
+  'connection',
+  'keep-alive',
+  'proxy-authenticate',
+  'proxy-authorization',
+  'te',
+  'trailer',
+  'transfer-encoding',
+  'upgrade',
+]);
+const RESERVED_EXACT = new Set([
+  'host',
+  'forwarded',
+  'x-real-ip',
+  'cf-access-authenticated-user-email',
+  'cf-access-jwt-assertion',
+]);
+const RESERVED_PREFIXES = ['x-forwarded-', 'x-ores-'];
 
 /** Find the host entry for an incoming hostname, or null. */
 export function matchHost(config, hostname) {
@@ -40,28 +59,92 @@ export function upstreamUrl(origin, requestUrl) {
   return base;
 }
 
-/** Strip hop-by-hop headers and set the origin Host. Returns a new Headers. */
-export function upstreamHeaders(requestHeaders, origin, clientIp) {
-  const h = new Headers(requestHeaders);
-  for (const k of HOP_BY_HOP) if (k !== 'upgrade' && k !== 'connection') h.delete(k);
+function connectionTokens(headers) {
+  const value = headers.get('connection');
+  if (!value) return new Set();
+  return new Set(
+    value
+      .split(',')
+      .map((token) => token.trim().toLowerCase())
+      .filter(Boolean),
+  );
+}
+
+function isReservedRequestHeader(name, dynamicHopByHop) {
+  const lower = name.toLowerCase();
+  return HOP_BY_HOP.has(lower)
+    || dynamicHopByHop.has(lower)
+    || RESERVED_EXACT.has(lower)
+    || RESERVED_PREFIXES.some((prefix) => lower.startsWith(prefix));
+}
+
+function stripCloudflareAuthorizationCookie(value) {
+  if (!value) return null;
+  const kept = value
+    .split(';')
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .filter((part) => part.split('=', 1)[0].toLowerCase() !== 'cf_authorization');
+  return kept.length > 0 ? kept.join('; ') : null;
+}
+
+/**
+ * Build trusted upstream request headers from an untrusted incoming request.
+ *
+ * This intentionally does not clone headers wholesale. Hop-by-hop headers,
+ * Connection-nominated headers, forwarding metadata, ORES routing metadata and
+ * Cloudflare Access identity material are removed before trusted values are
+ * reconstructed. WebSocket Upgrade/Connection are re-added only for an
+ * explicitly admitted websocket request.
+ */
+export function upstreamHeaders(
+  requestHeaders,
+  origin,
+  clientIp,
+  publicHost,
+  { websocket = false } = {},
+) {
+  const dynamicHopByHop = connectionTokens(requestHeaders);
+  const h = new Headers();
+
+  for (const [name, value] of requestHeaders.entries()) {
+    if (isReservedRequestHeader(name, dynamicHopByHop)) continue;
+    if (name.toLowerCase() === 'cookie') {
+      const sanitized = stripCloudflareAuthorizationCookie(value);
+      if (sanitized) h.set(name, sanitized);
+      continue;
+    }
+    h.append(name, value);
+  }
+
   h.set('Host', origin.hostHeader);
-  h.set('X-Forwarded-Host', requestHeaders.get('host') ?? origin.hostHeader);
+  h.set('X-Forwarded-Host', publicHost ?? origin.hostHeader);
   h.set('X-Forwarded-Proto', 'https');
   if (clientIp) h.set('X-Forwarded-For', clientIp);
+
+  if (websocket) {
+    h.set('Connection', 'Upgrade');
+    h.set('Upgrade', 'websocket');
+  }
   return h;
 }
 
-/** Access gate: returns a Response to short-circuit with, or null to continue. */
-export function accessGate(host, requestHeaders) {
+/**
+ * Access gate: returns a Response to short-circuit with, or null to continue.
+ * Protected routes cryptographically verify the Access JWT; presence of an
+ * Access-looking email/JWT header is never considered authentication.
+ */
+export async function accessGate(host, requestHeaders, env, verifyImpl) {
   if (host.access === 'public') return null;
   if (host.access === 'deny') return new Response('Not Found', { status: 404 });
-  // cloudflare-access: Cloudflare Access injects this header only after a
-  // successful policy evaluation; a Worker on a route behind Access never sees
-  // unauthenticated traffic, so absence means Access is not enforced yet.
-  const email = requestHeaders.get('cf-access-authenticated-user-email');
-  const jwt = requestHeaders.get('cf-access-jwt-assertion');
-  if (email || jwt) return null;
-  return new Response('Forbidden: Cloudflare Access required', { status: 403 });
+
+  const verified = await verifyCloudflareAccess(host, requestHeaders, env, verifyImpl);
+  if (verified.ok) return null;
+  const body = verified.status === 503 ? 'Access verifier unavailable' : 'Forbidden';
+  return new Response(body, {
+    status: verified.status,
+    headers: { 'cache-control': 'no-store' },
+  });
 }
 
 /** Headers we add to every proxied response for observability. */
@@ -72,3 +155,9 @@ export function decorateResponseHeaders(headers, decision, origin) {
   h.set('x-ores-router', 'ores-edge-router');
   return h;
 }
+
+export const __test = Object.freeze({
+  connectionTokens,
+  isReservedRequestHeader,
+  stripCloudflareAuthorizationCookie,
+});
