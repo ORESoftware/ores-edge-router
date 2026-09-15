@@ -2,10 +2,10 @@
 org = "ORESoftware"
 name = "ores-edge-router"
 version = "0.1.2"
-kind = "library"
 language = "typescript"
 
 [package.repository]
+vcs = "git"
 url = "https://github.com/ORESoftware/ores-edge-router"
 
 [dependencies]
