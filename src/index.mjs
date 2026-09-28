@@ -1,12 +1,14 @@
-// Cloudflare Worker entry: fetch handler (proxy with failover) + scheduled
-// handler (health probes). Config is injected as the ROUTER_CONFIG var
-// (JSON string) by the rendered wrangler.toml.
+// Cloudflare Worker entry: fetch handler (proxy with failover or safe read race)
+// + scheduled handler (health probes). Config is injected as the ROUTER_CONFIG
+// var (JSON string) by the rendered wrangler.toml.
 
 import { normalizeConfig } from './config.mjs';
 import { refreshHost, kvKey, INITIAL_STATE } from './health.mjs';
 import {
   matchHost,
   chooseOrigin,
+  isGatewayFailure,
+  shouldRaceOrigins,
   shouldRetryOnFallback,
   upstreamUrl,
   upstreamHeaders,
@@ -37,7 +39,7 @@ async function readState(env, config, host, now) {
   return state;
 }
 
-async function proxy(request, origin, host) {
+async function proxy(request, origin, host, signal) {
   if (origin.mode === 'unavailable') {
     return new Response(JSON.stringify({ error: 'origin_unavailable', host: host.publicHost, retryAfter: origin.retryAfter }), {
       status: 503,
@@ -66,11 +68,90 @@ async function proxy(request, origin, host) {
     headers,
     body: request.method === 'GET' || request.method === 'HEAD' ? undefined : request.body,
     redirect: 'manual',
+    signal,
   };
   if (websocket) {
     return fetch(url.toString(), init); // Workers pass 101 upgrades through unchanged
   }
   return fetch(url.toString(), init);
+}
+
+function gatewayErrorResponse() {
+  return new Response('Bad Gateway', {
+    status: 502,
+    headers: { 'cache-control': 'no-store' },
+  });
+}
+
+/**
+ * Race two equivalent proxy origins and return the first non-gateway-failure
+ * result. The slower request is aborted after a winner is known. If both lanes
+ * fail at the transport/gateway layer, the primary failure is returned for
+ * deterministic behavior and diagnostics.
+ */
+async function raceProxyOrigins(request, host) {
+  const lanes = [
+    { name: 'primary', origin: host.primary, controller: new AbortController() },
+    { name: 'fallback', origin: host.fallback, controller: new AbortController() },
+  ];
+
+  return new Promise((resolve) => {
+    let finished = false;
+    let settled = 0;
+    const failures = new Map();
+
+    const finish = (result) => {
+      if (finished) return;
+      finished = true;
+      for (const lane of lanes) {
+        if (lane.name !== result.lane) lane.controller.abort();
+      }
+      resolve(result);
+    };
+
+    for (const lane of lanes) {
+      proxy(request, lane.origin, host, lane.controller.signal)
+        .then((res) => {
+          if (finished) return;
+          if (!isGatewayFailure(res.status, false)) {
+            finish({
+              res,
+              origin: lane.origin,
+              lane: lane.name,
+              reason: `race-${lane.name}`,
+              primaryFailed: failures.has('primary'),
+            });
+            return;
+          }
+
+          failures.set(lane.name, res);
+          settled += 1;
+          if (settled === lanes.length) {
+            finish({
+              res: failures.get('primary') ?? failures.get('fallback') ?? gatewayErrorResponse(),
+              origin: host.primary,
+              lane: 'primary',
+              reason: 'race-both-gateway-failed',
+              primaryFailed: true,
+            });
+          }
+        })
+        .catch(() => {
+          if (finished) return;
+          failures.set(lane.name, gatewayErrorResponse());
+          settled += 1;
+          if (settled === lanes.length) {
+            finish({
+              res: failures.get('primary') ?? failures.get('fallback') ?? gatewayErrorResponse(),
+              origin: host.primary,
+              lane: 'primary',
+              reason: 'race-both-network-failed',
+              primaryFailed: true,
+            });
+          }
+        });
+    }
+  });
 }
 
 /**
@@ -133,6 +214,20 @@ export async function handleFetch(request, env, ctx, deps = {}) {
     return gate;
   }
 
+  const websocket = host.websocket && request.headers.get('upgrade')?.toLowerCase() === 'websocket';
+  if (shouldRaceOrigins(host, request.method, websocket)) {
+    const raced = await raceProxyOrigins(request, host);
+    if (raced.primaryFailed && raced.origin === host.fallback) {
+      ctx.waitUntil(markPrimarySuspect(env, config, host, now));
+    }
+    if (raced.res.status === 101) return raced.res;
+    return new Response(raced.res.body, {
+      status: raced.res.status,
+      statusText: raced.res.statusText,
+      headers: decorateResponseHeaders(raced.res.headers, { reason: raced.reason }, raced.origin),
+    });
+  }
+
   const state = await readState(env, config, host, now);
   const decision = chooseOrigin(host, state, now);
 
@@ -142,10 +237,7 @@ export async function handleFetch(request, env, ctx, deps = {}) {
     res = await proxy(request, decision.origin, host);
   } catch {
     networkError = true;
-    res = new Response('Bad Gateway', {
-      status: 502,
-      headers: { 'cache-control': 'no-store' },
-    });
+    res = gatewayErrorResponse();
   }
 
   let servedBy = decision.origin;
