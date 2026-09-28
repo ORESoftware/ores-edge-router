@@ -22,6 +22,11 @@ enum OriginMode {
   unavailable,
 }
 
+enum RoutingStrategy {
+  failover,
+  race,
+}
+
 model Origin {
   url?: string;
   hostHeader?: string;
@@ -44,6 +49,7 @@ model HostRoute {
   fallback?: Origin;
   health?: HealthPolicy;
   access?: AccessPolicy;
+  strategy?: RoutingStrategy;
   retryOnPrimaryError?: boolean;
   websocket?: boolean;
 }
