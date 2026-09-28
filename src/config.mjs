@@ -22,6 +22,7 @@ const DEFAULT_HEALTH = Object.freeze({
 
 const ORIGIN_KINDS = new Set(['k8s', 'cloudrun', 'cdn', 'github', 'pages', 'tunnel', 'other']);
 const ACCESS_MODES = new Set(['public', 'cloudflare-access', 'deny']);
+const ROUTING_STRATEGIES = new Set(['failover', 'race']);
 const LABEL_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const DOMAIN_RE = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/;
 const ORIGIN_URL_RE = /^https:\/\/[^/\s]+$/;
@@ -109,6 +110,14 @@ export function normalizeConfig(raw) {
     const fallback = h.fallback === undefined ? null : normalizeOrigin(h.fallback, `${p}.fallback`, publicHost);
     const access = h.access ?? (ADMIN_LABELS.includes(label) ? 'cloudflare-access' : 'public');
     if (!ACCESS_MODES.has(access)) throw new ConfigError('access must be public|cloudflare-access|deny', `${p}.access`);
+    const strategy = h.strategy ?? 'failover';
+    if (!ROUTING_STRATEGIES.has(strategy)) throw new ConfigError('strategy must be failover|race', `${p}.strategy`);
+    if (strategy === 'race') {
+      if (!fallback) throw new ConfigError('race strategy requires fallback', `${p}.fallback`);
+      if (primary.mode !== 'proxy' || fallback.mode !== 'proxy') {
+        throw new ConfigError('race strategy requires proxy primary and fallback origins', `${p}.strategy`);
+      }
+    }
     outHosts[label] = Object.freeze({
       label,
       publicHost,
@@ -116,6 +125,7 @@ export function normalizeConfig(raw) {
       fallback,
       health: normalizeHealth(h.health, `${p}.health`, health),
       access,
+      strategy,
       retryOnPrimaryError: h.retryOnPrimaryError ?? true,
       websocket: h.websocket ?? true,
     });
