@@ -5,6 +5,7 @@ import { verifyCloudflareAccess } from './access.mjs';
 import { isStale } from './health.mjs';
 
 const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS']);
+const GATEWAY_FAILURES = new Set([502, 503, 504, 521, 522, 523]);
 const HOP_BY_HOP = new Set([
   'connection',
   'keep-alive',
@@ -43,11 +44,28 @@ export function chooseOrigin(host, state, now) {
   return { origin: host.fallback, reason: 'primary-down', primaryUp: false };
 }
 
+/** Whether a response/network outcome represents transport/infrastructure failure. */
+export function isGatewayFailure(status, hadNetworkError = false) {
+  return hadNetworkError || GATEWAY_FAILURES.has(status);
+}
+
 /** Should a failed primary response be retried against the fallback? */
 export function shouldRetryOnFallback(host, method, status, hadNetworkError) {
   if (!host.fallback || !host.retryOnPrimaryError) return false;
   if (!IDEMPOTENT.has(method.toUpperCase())) return false;
-  return hadNetworkError || status === 502 || status === 503 || status === 504 || status === 521 || status === 522 || status === 523;
+  return isGatewayFailure(status, hadNetworkError);
+}
+
+/**
+ * Race mode is deliberately restricted to safe/idempotent HTTP reads. Mutations
+ * are never duplicated across origins. WebSocket handshakes also remain on the
+ * ordinary single-origin path.
+ */
+export function shouldRaceOrigins(host, method, websocket = false) {
+  if (host.strategy !== 'race' || !host.fallback) return false;
+  if (!IDEMPOTENT.has(method.toUpperCase())) return false;
+  if (websocket) return false;
+  return host.primary.mode === 'proxy' && host.fallback.mode === 'proxy';
 }
 
 /** Build the upstream URL for a request at a given origin. */
