@@ -4,6 +4,8 @@
 import { verifyCloudflareAccess } from './access.mjs';
 import { isStale } from './health.mjs';
 
+// HTTP method tokens are case-sensitive. Unknown/lowercase tokens must not
+// inherit the retry/race privileges of the standard safe read methods.
 const IDEMPOTENT = new Set(['GET', 'HEAD', 'OPTIONS']);
 const GATEWAY_FAILURES = new Set([502, 503, 504, 521, 522, 523]);
 const HOP_BY_HOP = new Set([
@@ -52,7 +54,7 @@ export function isGatewayFailure(status, hadNetworkError = false) {
 /** Should a failed primary response be retried against the fallback? */
 export function shouldRetryOnFallback(host, method, status, hadNetworkError) {
   if (!host.fallback || !host.retryOnPrimaryError) return false;
-  if (!IDEMPOTENT.has(method.toUpperCase())) return false;
+  if (!IDEMPOTENT.has(method)) return false;
   return isGatewayFailure(status, hadNetworkError);
 }
 
@@ -63,7 +65,7 @@ export function shouldRetryOnFallback(host, method, status, hadNetworkError) {
  */
 export function shouldRaceOrigins(host, method, websocket = false) {
   if (host.strategy !== 'race' || !host.fallback) return false;
-  if (!IDEMPOTENT.has(method.toUpperCase())) return false;
+  if (!IDEMPOTENT.has(method)) return false;
   if (websocket) return false;
   return host.primary.mode === 'proxy' && host.fallback.mode === 'proxy';
 }
