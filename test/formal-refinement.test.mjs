@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import { INITIAL_STATE, transition, isStale } from '../src/health.mjs';
 import {
   shouldRaceOrigins, shouldRetryOnFallback, chooseOrigin, isGatewayFailure,
+  upstreamHeaders,
 } from '../src/routing.mjs';
 
 const METHODS = ['GET', 'HEAD', 'OPTIONS', 'POST', 'PUT', 'PATCH', 'DELETE', 'TRACE'];
@@ -131,4 +132,56 @@ test('finite refinement: stale health fails back to primary, never an unproven f
     }
   }
   assert.equal(chooseOrigin({ primary, fallback: null, health: host.health }, null, 1000).origin, primary);
+});
+
+test('HTTP method case is a safety boundary, not an interchangeable spelling', () => {
+  const host = {
+    strategy: 'race', retryOnPrimaryError: true,
+    primary: { mode: 'proxy' }, fallback: { mode: 'proxy' },
+  };
+  for (const method of ['GET', 'HEAD', 'OPTIONS']) {
+    assert.equal(shouldRaceOrigins(host, method, false), true, method);
+    assert.equal(shouldRetryOnFallback(host, method, 503, false), true, method);
+  }
+  for (const method of ['get', 'head', 'options', 'GeT', 'GET ', ' GET', 'POST',
+    'DELETE', 'PATCH', 'TRACE', 'CONNECT', 'GET\\n', 'get\\0']) {
+    assert.equal(shouldRaceOrigins(host, method, false), false, method);
+    assert.equal(shouldRetryOnFallback(host, method, 503, true), false, method);
+  }
+});
+
+test('proxy header refinement never forwards client-asserted authority or dynamic hop fields', () => {
+  const source = new Headers({
+    'Connection': 'X-Extra-Hop, Upgrade',
+    'X-Extra-Hop': 'untrusted',
+    'Forwarded': 'for=evil.example',
+    'X-Forwarded-For': '203.0.113.13',
+    'X-Forwarded-Host': 'internal.example',
+    'X-Real-IP': '203.0.113.13',
+    'CF-Access-Jwt-Assertion': 'forged',
+    'CF-Access-Authenticated-User-Email': 'forged@example.com',
+    'X-Ores-Role': 'admin',
+    'Authorization': 'Bearer application-credential',
+    'Cookie': 'cf_authorization=forged; session=kept; CF_Authorization=forged2',
+    'X-Public-Marker': 'value',
+    'Host': 'evil.example',
+    'Upgrade': 'websocket',
+  });
+  const origin = { hostHeader: 'trusted.internal' };
+  for (const websocket of [false, true]) {
+    const h = upstreamHeaders(source, origin, '192.0.2.9', 'public.example', { websocket });
+    for (const name of ['x-extra-hop', 'forwarded', 'x-real-ip', 'cf-access-jwt-assertion',
+      'cf-access-authenticated-user-email', 'x-ores-role']) {
+      assert.equal(h.has(name), false, name);
+    }
+    assert.equal(h.get('host'), 'trusted.internal');
+    assert.equal(h.get('x-forwarded-host'), 'public.example');
+    assert.equal(h.get('x-forwarded-proto'), 'https');
+    assert.equal(h.get('x-forwarded-for'), '192.0.2.9');
+    assert.equal(h.get('authorization'), 'Bearer application-credential');
+    assert.equal(h.get('x-public-marker'), 'value');
+    assert.equal(h.get('cookie'), 'session=kept');
+    assert.equal(h.get('upgrade'), websocket ? 'websocket' : null);
+    assert.equal(h.get('connection'), websocket ? 'Upgrade' : null);
+  }
 });
